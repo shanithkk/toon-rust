@@ -1,29 +1,12 @@
-use serde_json::{
-    Map,
-    Number,
-    Value,
-};
+use serde_json::{Map, Number, Value};
 
 use crate::{
-    constants::{
-        KEYWORDS,
-        MAX_DEPTH,
-        QUOTED_KEY_MARKER,
-    },
+    constants::{KEYWORDS, MAX_DEPTH, QUOTED_KEY_MARKER},
     decode::{
-        scanner::{
-            Scanner,
-            Token,
-        },
+        scanner::{Scanner, Token},
         validation,
     },
-    types::{
-        DecodeOptions,
-        Delimiter,
-        ErrorContext,
-        ToonError,
-        ToonResult,
-    },
+    types::{DecodeOptions, Delimiter, ErrorContext, ToonError, ToonResult},
     utils::validation::validate_depth,
 };
 
@@ -142,7 +125,7 @@ impl<'a> Parser<'a> {
                     Ok(Value::Bool(val))
                 }
             }
-            Token::Integer(i) => {
+            Token::SignedInteger(i) => {
                 let next_char_is_colon = matches!(self.scanner.peek(), Some(':'));
                 if next_char_is_colon {
                     let key = i.to_string();
@@ -155,13 +138,54 @@ impl<'a> Parser<'a> {
                     // Check if followed by more value tokens on the same line
                     match &self.current_token {
                         Token::String(..)
-                        | Token::Integer(..)
+                        | Token::SignedInteger(..)
+                        | Token::UnsignedInteger(..)
                         | Token::Number(..)
                         | Token::Bool(..)
                         | Token::Null => {
                             let mut accumulated = first_text;
                             while let Token::String(..)
-                            | Token::Integer(..)
+                            | Token::SignedInteger(..)
+                            | Token::UnsignedInteger(..)
+                            | Token::Number(..)
+                            | Token::Bool(..)
+                            | Token::Null = &self.current_token
+                            {
+                                let ws = self.scanner.last_whitespace_count().max(1);
+                                for _ in 0..ws {
+                                    accumulated.push(' ');
+                                }
+                                accumulated.push_str(self.scanner.last_token_text());
+                                self.advance()?;
+                            }
+                            Ok(Value::String(accumulated))
+                        }
+                        _ => Ok(serde_json::Number::from(val).into()),
+                    }
+                }
+            }
+            Token::UnsignedInteger(i) => {
+                let next_char_is_colon = matches!(self.scanner.peek(), Some(':'));
+                if next_char_is_colon {
+                    let key = i.to_string();
+                    self.advance()?;
+                    self.parse_object_with_initial_key(key, depth)
+                } else {
+                    let first_text = self.scanner.last_token_text().to_string();
+                    let val = *i;
+                    self.advance()?;
+                    // Check if followed by more value tokens on the same line
+                    match &self.current_token {
+                        Token::String(..)
+                        | Token::SignedInteger(..)
+                        | Token::UnsignedInteger(..)
+                        | Token::Number(..)
+                        | Token::Bool(..)
+                        | Token::Null => {
+                            let mut accumulated = first_text;
+                            while let Token::String(..)
+                            | Token::SignedInteger(..)
+                            | Token::UnsignedInteger(..)
                             | Token::Number(..)
                             | Token::Bool(..)
                             | Token::Null = &self.current_token
@@ -192,13 +216,15 @@ impl<'a> Parser<'a> {
                     // Check if followed by more value tokens on the same line
                     match &self.current_token {
                         Token::String(..)
-                        | Token::Integer(..)
+                        | Token::SignedInteger(..)
+                        | Token::UnsignedInteger(..)
                         | Token::Number(..)
                         | Token::Bool(..)
                         | Token::Null => {
                             let mut accumulated = first_text;
                             while let Token::String(..)
-                            | Token::Integer(..)
+                            | Token::SignedInteger(..)
+                            | Token::UnsignedInteger(..)
                             | Token::Number(..)
                             | Token::Bool(..)
                             | Token::Null = &self.current_token
@@ -256,7 +282,8 @@ impl<'a> Parser<'a> {
                         // Root-level string value - join consecutive tokens with exact spacing
                         let mut accumulated = first;
                         while let Token::String(..)
-                        | Token::Integer(..)
+                        | Token::SignedInteger(..)
+                        | Token::UnsignedInteger(..)
                         | Token::Number(..)
                         | Token::Bool(..)
                         | Token::Null = &self.current_token
@@ -502,7 +529,8 @@ impl<'a> Parser<'a> {
                 // Single token - convert directly to avoid redundant parsing
                 match &self.current_token {
                     Token::String(s, _) => Ok(Value::String(s.clone())),
-                    Token::Integer(i) => Ok(serde_json::Number::from(*i).into()),
+                    Token::SignedInteger(i) => Ok(serde_json::Number::from(*i).into()),
+                    Token::UnsignedInteger(i) => Ok(serde_json::Number::from(*i).into()),
                     Token::Number(n) => {
                         let val = *n;
                         if val.is_finite() && val.fract() == 0.0 && val.abs() <= i64::MAX as f64 {
@@ -527,7 +555,8 @@ impl<'a> Parser<'a> {
                         token_text.clone()
                     }
                     Token::String(_, false)
-                    | Token::Integer(_)
+                    | Token::SignedInteger(_)
+                    | Token::UnsignedInteger(_)
                     | Token::Number(_)
                     | Token::Bool(_)
                     | Token::Null => token_text.clone(),
@@ -545,7 +574,8 @@ impl<'a> Parser<'a> {
                 let token = self.scanner.parse_value_string(&value_str)?;
                 match token {
                     Token::String(s, _) => Ok(Value::String(s)),
-                    Token::Integer(i) => Ok(serde_json::Number::from(i).into()),
+                    Token::SignedInteger(i) => Ok(serde_json::Number::from(i).into()),
+                    Token::UnsignedInteger(i) => Ok(serde_json::Number::from(i).into()),
                     Token::Number(n) => {
                         if n.is_finite() && n.fract() == 0.0 && n.abs() <= i64::MAX as f64 {
                             Ok(serde_json::Number::from(n as i64).into())
@@ -588,7 +618,9 @@ impl<'a> Parser<'a> {
 
         // Parse array length (plain integer only)
         // Supports formats: [N], [N|], [N\t] (no # marker)
-        let length = if let Token::Integer(n) = &self.current_token {
+        let length = if let Token::SignedInteger(n) = &self.current_token {
+            *n as usize
+        } else if let Token::UnsignedInteger(n) = &self.current_token {
             *n as usize
         } else if let Token::String(s, _) = &self.current_token {
             // Check if string starts with # - this marker is not supported
@@ -1182,7 +1214,8 @@ impl<'a> Parser<'a> {
             let result = match &self.current_token {
                 Token::Null => Ok(Value::Null),
                 Token::Bool(b) => Ok(Value::Bool(*b)),
-                Token::Integer(i) => Ok(Number::from(*i).into()),
+                Token::SignedInteger(i) => Ok(Number::from(*i).into()),
+                Token::UnsignedInteger(i) => Ok(Number::from(*i).into()),
                 Token::Number(n) => {
                     let val = *n;
                     if val.is_finite() && val.fract() == 0.0 && val.abs() <= i64::MAX as f64 {
@@ -1216,7 +1249,8 @@ impl<'a> Parser<'a> {
             self.current_token = self.scanner.scan_token()?;
             match token {
                 Token::String(s, _) => Ok(Value::String(s)),
-                Token::Integer(i) => Ok(Number::from(i).into()),
+                Token::SignedInteger(i) => Ok(Number::from(i).into()),
+                Token::UnsignedInteger(i) => Ok(Number::from(i).into()),
                 Token::Number(n) => {
                     if n.is_finite() && n.fract() == 0.0 && n.abs() <= i64::MAX as f64 {
                         Ok(Number::from(n as i64).into())
@@ -1244,7 +1278,7 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(Value::Bool(val))
             }
-            Token::Integer(i) => {
+            Token::SignedInteger(i) => {
                 let val = *i;
                 self.advance()?;
                 Ok(Number::from(val).into())
@@ -1526,10 +1560,7 @@ mod tests {
 
     #[test]
     fn test_round_trip_parentheses() {
-        use crate::{
-            decode::decode_default,
-            encode::encode_default,
-        };
+        use crate::{decode::decode_default, encode::encode_default};
 
         let original = json!({
             "message": "Mostly Functions (3 of 3)",
