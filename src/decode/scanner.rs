@@ -1,4 +1,8 @@
-use crate::types::{Delimiter, ToonError, ToonResult};
+use crate::types::{
+    Delimiter,
+    ToonError,
+    ToonResult,
+};
 
 /// Tokens produced by the scanner during lexical analysis.
 #[derive(Debug, Clone, PartialEq)]
@@ -611,7 +615,10 @@ mod tests {
             Token::Number(f64::consts::PI)
         );
         assert_eq!(scanner.scan_token().unwrap(), Token::SignedInteger(-5));
-        assert_eq!(scanner.scan_token().unwrap(), Token::UnsignedInteger(12591154125385152738));
+        assert_eq!(
+            scanner.scan_token().unwrap(),
+            Token::UnsignedInteger(12591154125385152738)
+        );
     }
 
     #[test]
