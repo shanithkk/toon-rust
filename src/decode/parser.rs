@@ -1300,6 +1300,11 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(Number::from(val).into())
             }
+            Token::UnsignedInteger(i) => {
+                let val = *i;
+                self.advance()?;
+                Ok(Number::from(val).into())
+            }
             Token::Number(n) => {
                 let val = *n;
                 self.advance()?;
